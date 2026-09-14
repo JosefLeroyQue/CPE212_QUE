@@ -1,0 +1,14 @@
+---
+- name: Create a symbolic link
+  hosts: all
+  tasks:
+    - name: Create source file
+      ansible.builtin.file:
+        path: "{{ ansible_facts['env']['HOME'] }}/source_file.txt"
+        state: touch
+
+    - name: Create symbolic link
+      ansible.builtin.file:
+        src: "{{ ansible_facts['env']['HOME'] }}/source_file.txt"
+        dest: "{{ ansible_facts['env']['HOME'] }}/source_link.txt"
+        state: link
