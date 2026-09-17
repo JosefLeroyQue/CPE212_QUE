@@ -1,0 +1,228 @@
+---
+- name: Update Ubuntu package cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  when: ansible_os_family == "Debian"
+
+- name: Install Nagios dependencies on Ubuntu
+  ansible.builtin.apt:
+    name:
+      - autoconf
+      - gcc
+      - libc6
+      - make
+      - apache2
+      - php
+      - libapache2-mod-php
+      - libgd-dev
+      - unzip
+      - libssl-dev
+      - openssl
+      - wget
+      - build-essential
+      - gettext
+      - apache2-utils
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Update CentOS package cache
+  ansible.builtin.dnf:
+    update_cache: true
+  when: ansible_os_family == "RedHat"
+
+- name: Install Nagios dependencies on CentOS
+  ansible.builtin.dnf:
+    name:
+      - autoconf
+      - gcc
+      - glibc
+      - make
+      - httpd
+      - php
+      - gd-devel
+      - unzip
+      - openssl-devel
+      - openssl
+      - wget
+      - tar
+      - gettext
+      - httpd-tools
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Create nagios group
+  ansible.builtin.group:
+    name: nagios
+    state: present
+
+- name: Create nagcmd group
+  ansible.builtin.group:
+    name: nagcmd
+    state: present
+
+- name: Create nagios user
+  ansible.builtin.user:
+    name: nagios
+    group: nagios
+    groups: nagcmd
+    append: true
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+
+- name: Add Apache user to nagcmd group on Ubuntu
+  ansible.builtin.user:
+    name: www-data
+    groups: nagcmd
+    append: true
+  when: ansible_os_family == "Debian"
+
+- name: Add Apache user to nagcmd group on CentOS
+  ansible.builtin.user:
+    name: apache
+    groups: nagcmd
+    append: true
+  when: ansible_os_family == "RedHat"
+
+- name: Download Nagios Core
+  ansible.builtin.shell: |
+    cd /tmp
+    wget -O nagioscore.tar.gz $(wget -q -O - https://api.github.com/repos/NagiosEnterprises/nagioscore/releases/latest | grep '"browser_download_url":' | grep -o 'https://[^"]*')
+  args:
+    creates: /tmp/nagioscore.tar.gz
+
+- name: Extract Nagios Core
+  ansible.builtin.shell: |
+    cd /tmp
+    tar -xzf nagioscore.tar.gz
+  args:
+    creates: /tmp/nagios-4.5.14
+
+- name: Configure Nagios Core
+  ansible.builtin.command:
+    cmd: ./configure --with-command-group=nagcmd
+    chdir: /tmp/nagios-4.5.14
+
+- name: Compile Nagios Core
+  ansible.builtin.command:
+    cmd: make all
+    chdir: /tmp/nagios-4.5.14
+
+- name: Install Nagios Core
+  ansible.builtin.command:
+    cmd: make install
+    chdir: /tmp/nagios-4.5.14
+
+- name: Install Nagios command mode
+  ansible.builtin.command:
+    cmd: make install-commandmode
+    chdir: /tmp/nagios-4.5.14
+
+- name: Install Nagios init scripts
+  ansible.builtin.command:
+    cmd: make install-init
+    chdir: /tmp/nagios-4.5.14
+
+- name: Install Nagios configuration
+  ansible.builtin.command:
+    cmd: make install-config
+    chdir: /tmp/nagios-4.5.14
+
+- name: Install Nagios web configuration
+  ansible.builtin.command:
+    cmd: make install-webconf
+    chdir: /tmp/nagios-4.5.14
+
+- name: Enable Apache rewrite module on Ubuntu
+  ansible.builtin.command:
+    cmd: a2enmod rewrite
+  register: apache_rewrite
+  changed_when: "'already enabled' not in apache_rewrite.stdout"
+  when: ansible_os_family == "Debian"
+
+- name: Enable Apache CGI module on Ubuntu
+  ansible.builtin.command:
+    cmd: a2enmod cgi
+  register: apache_cgi
+  changed_when: "'already enabled' not in apache_cgi.stdout"
+  when: ansible_os_family == "Debian"
+
+- name: Restart Apache on Ubuntu
+  ansible.builtin.systemd:
+    name: apache2
+    state: restarted
+    enabled: true
+  when: ansible_os_family == "Debian"
+
+- name: Restart Apache on CentOS
+  ansible.builtin.systemd:
+    name: httpd
+    state: restarted
+    enabled: true
+  when: ansible_os_family == "RedHat"
+
+- name: Create Nagios web authentication file
+  ansible.builtin.command:
+    cmd: htpasswd -bc /usr/local/nagios/etc/htpasswd.users nagiosadmin nagiosadmin
+  no_log: true
+
+- name: Download Nagios Plugins
+  ansible.builtin.get_url:
+    url: https://nagios-plugins.org/download/nagios-plugins-2.4.6.tar.gz
+    dest: /tmp/nagios-plugins-2.4.6.tar.gz
+    mode: '0644'
+
+- name: Extract Nagios Plugins
+  ansible.builtin.unarchive:
+    src: /tmp/nagios-plugins-2.4.6.tar.gz
+    dest: /tmp
+    remote_src: true
+    creates: /tmp/nagios-plugins-2.4.6
+
+- name: Configure Nagios Plugins
+  ansible.builtin.command:
+    cmd: ./configure --with-nagios-user=nagios --with-nagios-group=nagios
+    chdir: /tmp/nagios-plugins-2.4.6
+
+- name: Compile Nagios Plugins
+  ansible.builtin.command:
+    cmd: make
+    chdir: /tmp/nagios-plugins-2.4.6
+
+- name: Install Nagios Plugins
+  ansible.builtin.command:
+    cmd: make install
+    chdir: /tmp/nagios-plugins-2.4.6
+
+- name: Check Nagios configuration
+  ansible.builtin.command:
+    cmd: /usr/local/nagios/bin/nagios -v /usr/local/nagios/etc/nagios.cfg
+  register: nagios_config_check
+  changed_when: false
+
+- name: Enable Nagios service
+  ansible.builtin.systemd:
+    name: nagios
+    enabled: true
+
+- name: Start Nagios service
+  ansible.builtin.systemd:
+    name: nagios
+    state: started
+
+- name: Restart Apache service on Ubuntu
+  ansible.builtin.systemd:
+    name: apache2
+    state: restarted
+  when: ansible_os_family == "Debian"
+
+- name: Restart Apache service on CentOS
+  ansible.builtin.systemd:
+    name: httpd
+    state: restarted
+  when: ansible_os_family == "RedHat"
+
+- name: Display Nagios configuration result
+  ansible.builtin.debug:
+    msg: "{{ nagios_config_check.stdout_lines }}"
